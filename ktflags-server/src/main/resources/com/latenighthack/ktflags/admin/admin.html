@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ktflags</title>
+<style>
+ :root{--bg:#0f1115;--panel:#161a22;--line:#242b38;--fg:#d8dee9;--dim:#6b7689;--accent:#8fbcbb}
+ *{box-sizing:border-box}
+ body{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;background:var(--bg);color:var(--fg)}
+ header{padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);
+        display:flex;gap:12px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:2}
+ header b{color:var(--accent);letter-spacing:.04em}
+ h2{font-size:11px;margin:22px 16px 6px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em}
+ table{width:calc(100% - 32px);margin:0 16px;border-collapse:collapse}
+ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+ th{color:var(--dim);font-weight:400;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+ td.key{color:var(--fg)}
+ .badge{font-size:11px;padding:1px 6px;border-radius:3px;background:#2a3040;color:var(--fg)}
+ .src-subject{background:#5e81ac}.src-service{background:#a3733a}.src-code{background:#2a3040;color:var(--dim)}
+ .ro{opacity:.45}
+ .muted{color:var(--dim)}
+ input,select,button{font:inherit;background:#1b202b;color:var(--fg);
+   border:1px solid var(--line);border-radius:3px;padding:3px 6px}
+ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent)}
+ button{cursor:pointer}
+ button:hover:not(:disabled){border-color:var(--accent)}
+ button:disabled{opacity:.35;cursor:default}
+ #err{color:#bf616a;margin:8px 16px;min-height:1.4em;white-space:pre-wrap}
+ #subjhdr,#subject,#subjsave,#orphhdr,#orphans{display:none}
+ .spacer{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <b>ktflags</b>
+  <span id="schema" class="muted"></span>
+  <span id="rev" class="badge"></span>
+  <span class="spacer"></span>
+  <select id="sscope"><option value="user">user</option></select>
+  <input id="skey" placeholder="user id or context key" size="24">
+  <button id="lookup">look up</button>
+  <button id="clearsubj">clear</button>
+</header>
+
+<div id="err"></div>
+
+<h2>flags</h2>
+<table id="flags">
+  <thead><tr>
+    <th>key</th><th>scope</th><th>type</th><th>code default</th>
+    <th>service value</th><th>overrides</th><th></th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2 id="subjhdr">subject</h2>
+<table id="subject">
+  <thead><tr>
+    <th>key</th><th>scope</th><th>effective</th><th>source</th><th>value</th><th></th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+<div id="subjsave" style="margin:10px 16px"><button id="save">save subject</button></div>
+
+<h2 id="orphhdr">orphaned overrides</h2>
+<table id="orphans"><tbody></tbody></table>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const el = (t, txt) => { const n = document.createElement(t); if (txt != null) n.textContent = txt; return n; };
+
+const showErr = e => { $('#err').textContent = e ? 'error: ' + e.message : ''; };
+const setRev = r => { if (r != null) $('#rev').textContent = 'rev ' + r; };
+
+async function api(method, path, body) {
+  const res = await fetch('api/' + path, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new Error(data.message || res.statusText);
+  return data;
+}
+
+// The type tag drives both the widget and the ValueDto posted back, so the two can never disagree.
+function editor(type, value, onChange) {
+  const i = el('input');
+  if (type === 'bool') {
+    i.type = 'checkbox';
+    i.checked = !!(value && value.bool);
+    i.onchange = () => onChange({ type: 'bool', bool: i.checked });
+  } else if (type === 'int') {
+    i.type = 'number'; i.step = '1'; i.size = 8;
+    i.value = value ? value.int : 0;
+    i.onchange = () => onChange({ type: 'int', int: parseInt(i.value, 10) || 0 });
+  } else if (type === 'double') {
+    i.type = 'number'; i.step = 'any'; i.size = 8;
+    i.value = value ? value.double : 0;
+    i.onchange = () => onChange({ type: 'double', double: parseFloat(i.value) || 0 });
+  } else {
+    i.value = value ? value.string : '';
+    i.onchange = () => onChange({ type: 'string', string: i.value });
+  }
+  return i;
+}
+
+const show = v => v == null ? '—'
+  : v.type === 'bool' ? String(v.bool)
+  : v.type === 'int' ? String(v.int)
+  : v.type === 'double' ? String(v.double)
+  : JSON.stringify(v.string);
+
+async function loadFlags() {
+  showErr();
+  const d = await api('GET', 'flags');
+  $('#schema').textContent = d.schemaName;
+  setRev(d.revision);
+
+  // The scope picker only offers dimensions the schema actually declares.
+  const dims = [...new Set(d.flags.filter(f => f.scope === 'context').map(f => f.dimension))];
+  const current = $('#sscope').value;
+  $('#sscope').innerHTML = '<option value="user">user</option>' +
+    dims.map(x => `<option value="context:${x}">${x}</option>`).join('');
+  if ([...$('#sscope').options].some(o => o.value === current)) $('#sscope').value = current;
+
+  const body = $('#flags tbody');
+  body.innerHTML = '';
+  for (const f of d.flags) {
+    const tr = body.insertRow();
+    const k = tr.insertCell(); k.className = 'key'; k.textContent = f.key;
+    if (f.description) k.title = f.description;
+    tr.insertCell().appendChild(
+      el('span', f.scope + (f.dimension ? ':' + f.dimension : ''))).className = 'badge';
+    tr.insertCell().textContent = f.type;
+    tr.insertCell().appendChild(el('span', show(f.codeDefault))).className = 'muted';
+
+    tr.insertCell().appendChild(editor(f.type, f.serviceValue || f.codeDefault, v =>
+      api('PUT', `flags/${encodeURIComponent(f.key)}/service`, { value: v })
+        .then(loadFlags).catch(showErr)));
+
+    tr.insertCell().textContent = f.overrideCount || '';
+
+    const clear = el('button', 'clear');
+    clear.disabled = !f.serviceValue;
+    clear.onclick = () => api('DELETE', `flags/${encodeURIComponent(f.key)}/service`)
+      .then(loadFlags).catch(showErr);
+    tr.insertCell().appendChild(clear);
+  }
+
+  if (d.orphanCount) {
+    $('#orphhdr').style.display = '';
+    $('#orphans').style.display = '';
+    const o = await api('GET', 'orphans');
+    const ob = $('#orphans tbody');
+    ob.innerHTML = '';
+    for (const x of o.overrides) {
+      const tr = ob.insertRow();
+      tr.insertCell().textContent = x.flagKey;
+      tr.insertCell().textContent =
+        x.subject.scope + (x.subject.dimension ? ':' + x.subject.dimension : '') + ' / ' + x.subject.key;
+      tr.insertCell().textContent = show(x.value);
+    }
+    const tr = ob.insertRow();
+    const cell = tr.insertCell();
+    cell.colSpan = 3;
+    const purge = el('button', `purge all ${d.orphanCount}`);
+    purge.onclick = () => api('DELETE', 'orphans').then(loadFlags).catch(showErr);
+    cell.appendChild(purge);
+  } else {
+    $('#orphhdr').style.display = 'none';
+    $('#orphans').style.display = 'none';
+  }
+}
+
+let pending = {};
+let subjectRef = null;
+
+async function loadSubject() {
+  showErr();
+  pending = {};
+  const [scope, dim] = $('#sscope').value.split(':');
+  const key = $('#skey').value.trim();
+  if (!key) return;
+  subjectRef = { scope, dimension: dim || '', key };
+
+  let d;
+  try {
+    d = await api('GET', `subject?scope=${scope}&dim=${dim || ''}&key=${encodeURIComponent(key)}`);
+  } catch (e) { showErr(e); return; }
+
+  setRev(d.revision);
+  $('#subjhdr').style.display = $('#subject').style.display = $('#subjsave').style.display = '';
+  $('#subjhdr').textContent = `subject — ${scope}${dim ? ':' + dim : ''} / ${key}`;
+
+  const body = $('#subject tbody');
+  body.innerHTML = '';
+  for (const f of d.flags) {
+    const tr = body.insertRow();
+    if (!f.applicable) tr.className = 'ro';
+    const k = tr.insertCell(); k.className = 'key'; k.textContent = f.key;
+    tr.insertCell().appendChild(el('span', f.scope)).className = 'badge';
+    tr.insertCell().textContent = show(f.effective);
+    const src = tr.insertCell().appendChild(el('span', f.source));
+    src.className = 'badge src-' + f.source;
+
+    const valueCell = tr.insertCell();
+    // Flags this subject cannot own are still shown -- an operator needs to know what the user
+    // actually sees -- but they are not editable here.
+    if (f.applicable) {
+      valueCell.appendChild(editor(f.type, f.effective, v => { pending[f.key] = v; }));
+    } else {
+      valueCell.appendChild(el('span', 'set service-wide')).className = 'muted';
+    }
+
+    const actions = tr.insertCell();
+    if (f.applicable && f.overridden) {
+      const clear = el('button', 'clear');
+      clear.onclick = () => api('PUT', 'subject', { subject: subjectRef, clear: [f.key] })
+        .then(loadSubject).then(loadFlags).catch(showErr);
+      actions.appendChild(clear);
+    }
+  }
+}
+
+function clearSubject() {
+  subjectRef = null; pending = {};
+  $('#skey').value = '';
+  $('#subjhdr').style.display = $('#subject').style.display = $('#subjsave').style.display = 'none';
+}
+
+$('#lookup').onclick = loadSubject;
+$('#clearsubj').onclick = clearSubject;
+$('#skey').onkeydown = e => { if (e.key === 'Enter') loadSubject(); };
+$('#save').onclick = () =>
+  api('PUT', 'subject', { subject: subjectRef, set: pending })
+    .then(loadSubject).then(loadFlags).catch(showErr);
+
+loadFlags().catch(showErr);
+</script>
+</body>
+</html>

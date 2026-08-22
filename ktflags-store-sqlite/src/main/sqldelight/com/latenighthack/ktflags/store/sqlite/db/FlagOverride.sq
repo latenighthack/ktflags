@@ -1,0 +1,147 @@
+-- The one table. A row is addressed by (schema, flag, scope kind, dimension, key), which is the
+-- same addressing scheme the wire and the admin JSON use.
+--
+-- Values are a type tag plus four typed nullable columns rather than a serialized protobuf blob.
+-- Feature flags get fixed by hand at 3am, and `SELECT * FROM flag_override` has to be readable in
+-- a sqlite3 shell; a blob would also drag ktbuf into the persistence layer for no benefit.
+CREATE TABLE flag_override (
+    schema_name   TEXT    NOT NULL,
+    flag_key      TEXT    NOT NULL,
+    scope_kind    TEXT    NOT NULL,   -- 'service' | 'user' | 'context'
+    scope_dim     TEXT    NOT NULL,   -- '' unless scope_kind = 'context'
+    scope_key     TEXT    NOT NULL,   -- '' for service; the user id; the context key
+    value_type    TEXT    NOT NULL,   -- 'bool' | 'string' | 'int' | 'double'
+    bool_value    INTEGER,
+    string_value  TEXT,
+    int_value     INTEGER,
+    double_value  REAL,
+    updated_at_ms INTEGER NOT NULL,
+    updated_by    TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (schema_name, flag_key, scope_kind, scope_dim, scope_key),
+    CHECK (scope_kind IN ('service', 'user', 'context')),
+    CHECK (value_type IN ('bool', 'string', 'int', 'double')),
+    -- Exactly one payload column is populated. Self-documenting, and it makes a codec bug a
+    -- constraint violation at write time rather than a silently-defaulted flag at read time.
+    CHECK (
+        (CASE WHEN bool_value   IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN string_value IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN int_value    IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN double_value IS NULL THEN 0 ELSE 1 END) = 1
+    )
+);
+
+-- Turns the admin panel's "show me this subject" into an index seek instead of a table scan.
+CREATE INDEX flag_override_subject_idx
+    ON flag_override (schema_name, scope_kind, scope_dim, scope_key);
+
+-- One monotonic counter per schema, bumped in the same transaction as every write that changes
+-- something. This is what makes the client's conditional fetch work, and it is why ktflags needs
+-- no streaming RPC.
+CREATE TABLE flag_revision (
+    schema_name   TEXT    NOT NULL PRIMARY KEY,
+    revision      INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+selectRevision:
+SELECT revision FROM flag_revision WHERE schema_name = :schemaName;
+
+bumpRevision:
+INSERT INTO flag_revision(schema_name, revision, updated_at_ms)
+VALUES (:schemaName, 1, :nowMs)
+ON CONFLICT(schema_name) DO UPDATE SET
+    revision = flag_revision.revision + 1,
+    updated_at_ms = excluded.updated_at_ms;
+
+-- Everything that could apply to one caller, in one query: the service rows plus this user's rows.
+-- Context rows come from selectContextCandidates so the query shape stays fixed.
+selectServiceAndUser:
+SELECT * FROM flag_override
+WHERE schema_name = :schemaName
+  AND (scope_kind = 'service' OR (scope_kind = 'user' AND scope_key = :userId))
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+-- Over-fetches the cross product of the requested dimensions and keys (dimension 'region' with key
+-- 'acme', say) and is filtered to the exact pairs in Kotlin. With a handful of dimensions that
+-- costs nothing and keeps the query shape fixed, which SQLDelight requires. Switch to one query
+-- per dimension if a deployment ever declares many.
+selectContextCandidates:
+SELECT * FROM flag_override
+WHERE schema_name = :schemaName
+  AND scope_kind = 'context'
+  AND scope_dim IN :dimensions
+  AND scope_key IN :contextKeys
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+selectService:
+SELECT * FROM flag_override
+WHERE schema_name = :schemaName AND scope_kind = 'service'
+ORDER BY flag_key;
+
+selectSubject:
+SELECT * FROM flag_override
+WHERE schema_name = :schemaName
+  AND scope_kind = :scopeKind AND scope_dim = :scopeDim AND scope_key = :scopeKey
+ORDER BY flag_key;
+
+-- ORDER BY the whole primary key, not just flag_key: several rows can share a flag_key
+-- (one per subject), and an admin listing that reorders itself between reads is a bug.
+selectAll:
+SELECT * FROM flag_override WHERE schema_name = :schemaName
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+upsert:
+INSERT INTO flag_override(
+    schema_name, flag_key, scope_kind, scope_dim, scope_key,
+    value_type, bool_value, string_value, int_value, double_value,
+    updated_at_ms, updated_by)
+VALUES (
+    :schemaName, :flagKey, :scopeKind, :scopeDim, :scopeKey,
+    :valueType, :boolValue, :stringValue, :intValue, :doubleValue,
+    :nowMs, :updatedBy)
+ON CONFLICT(schema_name, flag_key, scope_kind, scope_dim, scope_key) DO UPDATE SET
+    value_type    = excluded.value_type,
+    bool_value    = excluded.bool_value,
+    string_value  = excluded.string_value,
+    int_value     = excluded.int_value,
+    double_value  = excluded.double_value,
+    updated_at_ms = excluded.updated_at_ms,
+    updated_by    = excluded.updated_by;
+
+deleteOne:
+DELETE FROM flag_override
+WHERE schema_name = :schemaName AND flag_key = :flagKey
+  AND scope_kind = :scopeKind AND scope_dim = :scopeDim AND scope_key = :scopeKey;
+
+changes:
+SELECT changes();
+
+-- GROUP BY rather than SELECT DISTINCT, and a pre-built LIKE pattern rather than `|| '%'`:
+-- SQLDelight 2.0.2's PostgreSQL dialect parses neither DISTINCT nor `||` inside a predicate, and
+-- keeping both stores on the identical construct is what stops them drifting.
+listSubjects:
+SELECT scope_kind, scope_dim, scope_key FROM flag_override
+WHERE schema_name = :schemaName AND scope_kind = :scopeKind AND scope_dim = :scopeDim
+  AND scope_key LIKE :keyPattern
+GROUP BY scope_kind, scope_dim, scope_key
+ORDER BY scope_key
+LIMIT :limit;
+
+overrideCounts:
+SELECT flag_key, COUNT(*) AS override_count FROM flag_override
+WHERE schema_name = :schemaName AND scope_kind <> 'service'
+GROUP BY flag_key;
+
+-- `knownKeys` is never empty at this point: the repository short-circuits that case, because
+-- `NOT IN ()` is a syntax error rather than "matches everything".
+selectOrphans:
+SELECT * FROM flag_override
+WHERE schema_name = :schemaName AND flag_key NOT IN :knownKeys
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+deleteOrphans:
+DELETE FROM flag_override
+WHERE schema_name = :schemaName AND flag_key NOT IN :knownKeys;
+
+deleteAllForSchema:
+DELETE FROM flag_override WHERE schema_name = :schemaName;

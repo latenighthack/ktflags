@@ -1,0 +1,34 @@
+-- Table names are prefixed and the Flyway history table is separate (see PostgresFlagsRepository):
+-- these tables live in the HOST application's database, so nothing here may collide with theirs.
+CREATE TABLE ktflags_flag_override (
+    schema_name   TEXT             NOT NULL,
+    flag_key      TEXT             NOT NULL,
+    scope_kind    TEXT             NOT NULL,
+    scope_dim     TEXT             NOT NULL,
+    scope_key     TEXT             NOT NULL,
+    value_type    TEXT             NOT NULL,
+    bool_value    BOOLEAN,
+    string_value  TEXT,
+    int_value     BIGINT,
+    double_value  DOUBLE PRECISION,
+    updated_at_ms BIGINT           NOT NULL,
+    updated_by    TEXT             NOT NULL DEFAULT '',
+    PRIMARY KEY (schema_name, flag_key, scope_kind, scope_dim, scope_key),
+    CONSTRAINT ktflags_scope_kind_ck CHECK (scope_kind IN ('service', 'user', 'context')),
+    CONSTRAINT ktflags_value_type_ck CHECK (value_type IN ('bool', 'string', 'int', 'double')),
+    CONSTRAINT ktflags_one_value_ck CHECK (
+        (CASE WHEN bool_value   IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN string_value IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN int_value    IS NULL THEN 0 ELSE 1 END) +
+        (CASE WHEN double_value IS NULL THEN 0 ELSE 1 END) = 1
+    )
+);
+
+CREATE INDEX ktflags_flag_override_subject_idx
+    ON ktflags_flag_override (schema_name, scope_kind, scope_dim, scope_key);
+
+CREATE TABLE ktflags_flag_revision (
+    schema_name   TEXT   PRIMARY KEY,
+    revision      BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL
+);

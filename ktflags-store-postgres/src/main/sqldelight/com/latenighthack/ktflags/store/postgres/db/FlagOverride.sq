@@ -1,0 +1,98 @@
+selectRevision:
+SELECT revision FROM ktflags_flag_revision WHERE schema_name = :schemaName;
+
+bumpRevision:
+INSERT INTO ktflags_flag_revision(schema_name, revision, updated_at_ms)
+VALUES (:schemaName, 1, :nowMs)
+ON CONFLICT(schema_name) DO UPDATE SET
+    revision = ktflags_flag_revision.revision + 1,
+    updated_at_ms = EXCLUDED.updated_at_ms;
+
+selectServiceAndUser:
+SELECT * FROM ktflags_flag_override
+WHERE schema_name = :schemaName
+  AND (scope_kind = 'service' OR (scope_kind = 'user' AND scope_key = :userId))
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+selectContextCandidates:
+SELECT * FROM ktflags_flag_override
+WHERE schema_name = :schemaName
+  AND scope_kind = 'context'
+  AND scope_dim IN :dimensions
+  AND scope_key IN :contextKeys
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+selectService:
+SELECT * FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND scope_kind = 'service'
+ORDER BY flag_key;
+
+selectSubject:
+SELECT * FROM ktflags_flag_override
+WHERE schema_name = :schemaName
+  AND scope_kind = :scopeKind AND scope_dim = :scopeDim AND scope_key = :scopeKey
+ORDER BY flag_key;
+
+-- ORDER BY the whole primary key, not just flag_key: several rows can share a flag_key
+-- (one per subject), and an admin listing that reorders itself between reads is a bug.
+selectAll:
+SELECT * FROM ktflags_flag_override WHERE schema_name = :schemaName
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+upsert:
+INSERT INTO ktflags_flag_override(
+    schema_name, flag_key, scope_kind, scope_dim, scope_key,
+    value_type, bool_value, string_value, int_value, double_value,
+    updated_at_ms, updated_by)
+VALUES (
+    :schemaName, :flagKey, :scopeKind, :scopeDim, :scopeKey,
+    :valueType, :boolValue, :stringValue, :intValue, :doubleValue,
+    :nowMs, :updatedBy)
+ON CONFLICT(schema_name, flag_key, scope_kind, scope_dim, scope_key) DO UPDATE SET
+    value_type    = EXCLUDED.value_type,
+    bool_value    = EXCLUDED.bool_value,
+    string_value  = EXCLUDED.string_value,
+    int_value     = EXCLUDED.int_value,
+    double_value  = EXCLUDED.double_value,
+    updated_at_ms = EXCLUDED.updated_at_ms,
+    updated_by    = EXCLUDED.updated_by;
+
+-- Postgres has no changes(), and this SQLDelight dialect will not parse DELETE ... RETURNING, so
+-- "did a row actually go away" is answered by counting first inside the same transaction.
+countOne:
+SELECT COUNT(*) FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND flag_key = :flagKey
+  AND scope_kind = :scopeKind AND scope_dim = :scopeDim AND scope_key = :scopeKey;
+
+deleteOne:
+DELETE FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND flag_key = :flagKey
+  AND scope_kind = :scopeKind AND scope_dim = :scopeDim AND scope_key = :scopeKey;
+
+-- GROUP BY rather than SELECT DISTINCT, and a pre-built LIKE pattern rather than `|| '%'`:
+-- SQLDelight 2.0.2's PostgreSQL dialect parses neither DISTINCT nor `||` inside a predicate, and
+-- keeping both stores on the identical construct is what stops them drifting.
+listSubjects:
+SELECT scope_kind, scope_dim, scope_key FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND scope_kind = :scopeKind AND scope_dim = :scopeDim
+  AND scope_key LIKE :keyPattern
+GROUP BY scope_kind, scope_dim, scope_key
+ORDER BY scope_key
+LIMIT :limit;
+
+overrideCounts:
+SELECT flag_key, COUNT(*) AS override_count FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND scope_kind <> 'service'
+GROUP BY flag_key;
+
+selectOrphans:
+SELECT * FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND flag_key NOT IN :knownKeys
+ORDER BY flag_key, scope_kind, scope_dim, scope_key;
+
+deleteOrphans:
+DELETE FROM ktflags_flag_override
+WHERE schema_name = :schemaName AND flag_key NOT IN :knownKeys;
+
+deleteAllForSchema:
+DELETE FROM ktflags_flag_override WHERE schema_name = :schemaName;
