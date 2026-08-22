@@ -61,7 +61,7 @@ public interface FeatureFlags<T : Any> {
 
     public val state: StateFlow<FlagsState>
 
-    public fun current(): T
+    public val current: T
 
     public suspend fun refresh(): RefreshResult
 }
@@ -84,7 +84,7 @@ public interface FeatureFlags<T : Any> {
  *     userIdProvider = { session.userId }
  * })
  * flags.startIn(applicationScope)
- * if (flags.current().newCheckout) { ... }
+ * if (flags.current.newCheckout) { ... }
  * ```
  */
 public class FeatureFlagsProvider<T : Any>(
@@ -115,7 +115,7 @@ public class FeatureFlagsProvider<T : Any>(
 
     override val state: StateFlow<FlagsState> = mutableState.asStateFlow()
 
-    override fun current(): T = mutableFlags.value
+    override val current: T get() = mutableFlags.value
 
     /**
      * Loads the cached snapshot, then fetches if [FeatureFlagsConfig.Builder.refreshOnStart].

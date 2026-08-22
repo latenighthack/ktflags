@@ -117,7 +117,7 @@ class ProviderCacheTest {
 
         provider.start()
 
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
     }
 
     @Test
@@ -158,7 +158,7 @@ class ProviderCacheTest {
 
         provider.start()
 
-        assertEquals(TestFlags(), provider.current())
+        assertEquals(TestFlags(), provider.current)
     }
 
     @Test
@@ -197,6 +197,6 @@ class ProviderCacheTest {
         )
 
         assertEquals(RefreshResult.Updated(1L), provider.start())
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
     }
 }

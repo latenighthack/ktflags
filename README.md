@@ -116,7 +116,7 @@ val flags = FeatureFlagsProvider(AppFlagsSchema, FeatureFlagsConfig {
 
 flags.startIn(applicationScope)                   // load cache, then fetch
 
-if (flags.current().newCheckout) { /* ... */ }
+if (flags.current.newCheckout) { /* ... */ }
 flags.flags.collect { render(it) }                // StateFlow<AppFlags>
 ```
 
@@ -242,7 +242,7 @@ val provider = FeatureFlagsProvider(AppFlagsSchema, FeatureFlagsConfig {
 
 service.setOverride("newCheckout", FlagSubjectRef.Service, FlagValue.of(true))
 provider.refresh()
-assertEquals(true, provider.current().newCheckout)
+assertEquals(true, provider.current.newCheckout)
 ```
 
 And one test worth having in every flags module:

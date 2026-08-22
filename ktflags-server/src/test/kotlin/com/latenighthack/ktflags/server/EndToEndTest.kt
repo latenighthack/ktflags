@@ -55,12 +55,12 @@ class InProcessEndToEndTest {
     fun a_service_rollout_reaches_the_client_as_a_typed_flag() = runTest {
         val (service, provider) = harness()
 
-        assertEquals(TestFlags(), provider.current())
+        assertEquals(TestFlags(), provider.current)
 
         service.setOverride("newCheckout", FlagSubjectRef.Service, FlagValue.of(true))
         assertIs<RefreshResult.Updated>(provider.refresh())
 
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
     }
 
     @Test
@@ -70,7 +70,7 @@ class InProcessEndToEndTest {
         service.setOverride("darkMode", FlagSubjectRef.user("u-42"), FlagValue.of(false))
         provider.refresh()
 
-        assertEquals(false, provider.current().darkMode)
+        assertEquals(false, provider.current.darkMode)
     }
 
     @Test
@@ -79,7 +79,7 @@ class InProcessEndToEndTest {
         service.setOverride("betaApi", FlagSubjectRef.context("tenant", "acme"), FlagValue.of(true))
         provider.refresh()
 
-        assertEquals(true, provider.current().betaApi)
+        assertEquals(true, provider.current.betaApi)
     }
 
     @Test
@@ -98,7 +98,7 @@ class InProcessEndToEndTest {
                 maxItems = 99,
                 samplingRate = 0.125,
             ),
-            provider.current(),
+            provider.current,
         )
     }
 
@@ -117,7 +117,7 @@ class InProcessEndToEndTest {
         val second = provider.refresh()
         val notModified = assertIs<RefreshResult.NotModified>(second)
         assertEquals((first as RefreshResult.Updated).revision, notModified.revision)
-        assertEquals(true, provider.current().newCheckout, "values survive a not-modified reply")
+        assertEquals(true, provider.current.newCheckout, "values survive a not-modified reply")
     }
 
     @Test
@@ -128,7 +128,7 @@ class InProcessEndToEndTest {
 
         service.setOverride("newCheckout", FlagSubjectRef.Service, FlagValue.of(true))
         assertIs<RefreshResult.Updated>(provider.refresh())
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
     }
 
     @Test
@@ -136,11 +136,11 @@ class InProcessEndToEndTest {
         val (service, provider) = harness()
         service.setOverride("maxItems", FlagSubjectRef.Service, FlagValue.of(99))
         provider.refresh()
-        assertEquals(99, provider.current().maxItems)
+        assertEquals(99, provider.current.maxItems)
 
         service.clearOverride("maxItems", FlagSubjectRef.Service)
         provider.refresh()
-        assertEquals(10, provider.current().maxItems)
+        assertEquals(10, provider.current.maxItems)
     }
 
     @Test
@@ -158,10 +158,10 @@ class InProcessEndToEndTest {
         service.setOverride("variant", FlagSubjectRef.user("u-2"), FlagValue.of("beta"))
 
         provider.refresh()
-        assertEquals("alpha", provider.current().variant)
+        assertEquals("alpha", provider.current.variant)
 
         provider.setSubject("u-2")
-        assertEquals("beta", provider.current().variant)
+        assertEquals("beta", provider.current.variant)
     }
 }
 
@@ -197,8 +197,8 @@ class WireEndToEndTest {
                 )
 
                 assertIs<RefreshResult.Updated>(provider.refresh())
-                assertEquals(true, provider.current().newCheckout)
-                assertEquals("treatment", provider.current().variant)
+                assertEquals(true, provider.current.newCheckout)
+                assertEquals("treatment", provider.current.variant)
 
                 // The conditional fetch works across the wire too.
                 assertIs<RefreshResult.NotModified>(provider.refresh())
@@ -240,7 +240,7 @@ class WireEndToEndTest {
                 )
                 assertIs<RefreshResult.Updated>(provider.refresh())
 
-                val values = provider.current()
+                val values = provider.current
                 assertTrue(
                     values.contentBytes >= 8_192,
                     "the payload carried only ${values.contentBytes} bytes, too small to be a canary",

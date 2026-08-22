@@ -23,7 +23,7 @@ class FeatureFlagsProviderTest {
             TestFlagsSchema,
             testConfig(ScriptedTransport.returning()),
         )
-        assertEquals(TestFlags(), provider.current())
+        assertEquals(TestFlags(), provider.current)
         assertEquals(FlagsState.Defaults, provider.state.value)
     }
 
@@ -42,7 +42,7 @@ class FeatureFlagsProviderTest {
         assertEquals(RefreshResult.Updated(7L), result)
         assertEquals(
             TestFlags(newCheckout = true, variant = "treatment", maxItems = 99),
-            provider.current(),
+            provider.current,
         )
         assertEquals(FlagsState.Fresh(7L, 1_000L), provider.state.value)
     }
@@ -54,8 +54,8 @@ class FeatureFlagsProviderTest {
 
         provider.refresh()
 
-        assertEquals(TestFlags(newCheckout = true), provider.current())
-        assertEquals("control", provider.current().variant)
+        assertEquals(TestFlags(newCheckout = true), provider.current)
+        assertEquals("control", provider.current.variant)
     }
 
     @Test
@@ -68,7 +68,7 @@ class FeatureFlagsProviderTest {
         val result = provider.refresh()
 
         assertEquals(RefreshResult.NotModified(3L), result)
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
     }
 
     // The whole point of the conditional fetch: a second refresh tells the server what it already
@@ -101,7 +101,7 @@ class FeatureFlagsProviderTest {
         assertEquals(Codes.UNAVAILABLE, failed.error.code)
         assertTrue(failed.error.retriable)
         // Values survive: a stale flag beats a wrong one.
-        assertEquals(true, provider.current().newCheckout)
+        assertEquals(true, provider.current.newCheckout)
         val state = assertIs<FlagsState.Stale>(provider.state.value)
         assertEquals(1L, state.revision)
     }
@@ -113,7 +113,7 @@ class FeatureFlagsProviderTest {
             testConfig(ScriptedTransport.failing(Codes.UNAVAILABLE)),
         )
         assertIs<RefreshResult.Failed>(provider.start())
-        assertEquals(TestFlags(), provider.current())
+        assertEquals(TestFlags(), provider.current)
     }
 
     @Test
@@ -206,7 +206,7 @@ class FeatureFlagsProviderTest {
             testConfig(transport, userId = "u-1"),
         )
         provider.refresh()
-        assertEquals(true, provider.current().darkMode)
+        assertEquals(true, provider.current.darkMode)
 
         transport.respondWith { evaluateResponse(9L) }
         provider.setSubject("u-2")
@@ -214,7 +214,7 @@ class FeatureFlagsProviderTest {
         // A revision fetched for one subject means nothing for another.
         assertEquals(0L, transport.requests.last().knownRevision)
         assertEquals("u-2", transport.requests.last().userId)
-        assertEquals(false, provider.current().darkMode)
+        assertEquals(false, provider.current.darkMode)
     }
 
     @Test
