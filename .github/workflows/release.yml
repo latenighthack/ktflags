@@ -1,0 +1,93 @@
+name: release
+
+# Publishing to Maven Central is driven by a version tag: push `vX.Y.Z` and this workflow verifies
+# the tag matches VERSION_NAME, builds every published module (Apple + Android + JVM + JS targets)
+# and uploads them through the Central Portal. SONATYPE_AUTOMATIC_RELEASE=true (gradle.properties)
+# means the staged deployment is released automatically once validation passes -- no manual button.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual re-run for the same commit, e.g. after a transient Central Portal failure.
+  workflow_dispatch:
+
+concurrency:
+  # Unlike build.yml this must NOT cancel in progress: a half-finished upload to Central is worse
+  # than a queued one.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to Maven Central
+    # macOS, not ubuntu: the Kotlin/Native Apple targets are part of the multiplatform publications,
+    # and an ubuntu runner silently skips them rather than failing (same reason as build.yml).
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # A version tag must name the version that is actually published. Catch a mismatch here rather
+      # than after artifacts are already on Central, where it cannot be undone.
+      - name: Verify tag matches VERSION_NAME
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PROJECT_VERSION="$(grep '^VERSION_NAME=' gradle.properties | cut -d'=' -f2)"
+          echo "Tag version:     $TAG_VERSION"
+          echo "Project version: $PROJECT_VERSION"
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION_NAME=$PROJECT_VERSION in gradle.properties"
+            exit 1
+          fi
+
+      # protoc-gen-kt is a Go binary and the only codegen prerequisite the build cannot resolve from
+      # Maven (protoc itself comes from a pinned Maven artifact). Same as build.yml.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: ./scripts/bootstrap.sh
+      - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # ktbuf 1.1.8 is the first version with macOS targets and is not on Central yet, so ktflags
+      # resolves it from mavenLocal. Same as build.yml.
+      - uses: actions/checkout@v4
+        with:
+          repository: latenighthack/ktbuf
+          path: .ktbuf
+          continue-on-error: true
+      - name: Publish ktbuf to mavenLocal
+        continue-on-error: true
+        run: |
+          if [ -d .ktbuf ]; then
+            cd .ktbuf && ./gradlew --no-daemon \
+              :library:publishToMavenLocal :rpc:publishToMavenLocal \
+              :server:publishToMavenLocal :test:publishToMavenLocal
+          fi
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Publishes every module that applies the vanniktech plugin; the demos have their publish tasks
+      # disabled in the root build.gradle.kts, so this is exactly the eight published artifacts.
+      # --no-configuration-cache: the publish tasks are not configuration-cache compatible.
+      - name: Publish libraries
+        run: ./gradlew publishToMavenCentral --no-configuration-cache --stacktrace
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+
+      # The consumer Gradle plugin is a separate included build (settings.gradle.kts includeBuild),
+      # so its publish task is not reached by the root invocation above and needs its own step.
+      - name: Publish Gradle plugin
+        run: ./gradlew -p ktflags-gradle-plugin publishToMavenCentral --no-configuration-cache --stacktrace
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
